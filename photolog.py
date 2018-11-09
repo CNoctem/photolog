@@ -1,44 +1,21 @@
 import glob
-import sys, os
-import time
+import logging
+import os
+import sys
 
-import exifread
+import time
 from datetime import datetime
 
-TAG_DATETIME_ORIG = 'EXIF DateTimeOriginal'
+import mylogger
+import pactions
+import pfilters
+from pfile import PFile
 
-
-class PFile:
-    def __init__(self, filename):
-        self.filename = filename
-        f = open(self.filename, 'rb')
-        t0 = time.time()
-        self.tags = exifread.process_file(f)
-        dt = time.time() - t0
-        print('TAGS ', filename, ' in ', dt)
-
-    def getTag(self, tagname):
-        return self.tags[tagname]
-
-
-class Filter:
-    def apply(self, pFile):
-        return True
-
-
-class DateFilter(Filter):
-    def __init__(self, startDateStr, endDateStr):
-        self.start = parseDate(startDateStr)
-        self.end = parseDate(endDateStr)
-
-    def apply(self, pfile):
-        dto = str(pfile.getTag(TAG_DATETIME_ORIG))
-        t = parseDate(dto)
-        return self.start <= t <= self.end
-
+log = mylogger.getLogger(level = logging.DEBUG)
 
 class Argparser:
-    dateFilterOn = False
+    actions = []
+    filters = []
 
     def __init__(self):
         args = sys.argv[1:]
@@ -49,31 +26,33 @@ class Argparser:
                 self.endDate = args[i + 1]
             elif os.path.isdir(a):
                 self.root = args[i]
+            elif a == 'put':
+                self.actions.append(pactions.PutAction())
+            elif a == 'filter':
+                self.filters.append(pfilters.FilenameFilter(args[i + 1]))
+                self.extensions = args[i + 1].split(',')
+            # elif a == 'get':
+
+
+
         self.postInit()
 
     def postInit(self):
         if hasattr(self, 'startDate'):
             if not hasattr(self, 'endDate'):
                 self.endDate = datetime.strftime(datetime.now(), '%Y:%m:%d %H:%M:%S')
-            self.dateFilterOn = True
+            self.filters.append(pfilters.DateFilter(self.startDate, self.endDate))
 
 
-def parseDate(dateStr):
-    try:
-        return datetime.strptime(dateStr, '%Y:%m:%d')
-    except:
-        return datetime.strptime(dateStr, '%Y:%m:%d %H:%M:%S')
-
-
-def collect(root, extensions):
+def collect(argparser):
     c = []
-    print('Collecting')
+    log.info('Collecting')
     t0 = time.time()
-    for file in glob.iglob(root + '/**/*', recursive=True):
-        for e in extensions:
+    for file in glob.iglob(argparser.root + '/**/*', recursive=True):
+        for e in argparser.extensions:
             if file.endswith('.' + e):
                 c.append(PFile(file))
-    print('Collected', len(c), 'files in', time.time() - t0, 's')
+    log.info('Collected %s files in %ss' % (len(c), time.time() - t0))
     return c
 
 
@@ -92,19 +71,12 @@ def filter(collection, filters):
     return filtered
 
 
-filters = []
 ap = Argparser()
-print('Root:\t\t\t\t', ap.root)
+log.info('Root:\t\t\t\t%s' % ap.root)
 
-all = collect(ap.root, ['JPG'])
-if ap.dateFilterOn:
-    print('Date filter [ON]:\t', ap.startDate, '...', ap.endDate)
-    filters.append(DateFilter(ap.startDate, ap.endDate))
-else:
-    print('Date filter [OFF]')
-
-print("Filtering...")
-for f in filter(all, filters):
-    print(f.filename, ' .. ', f.getTag(TAG_DATETIME_ORIG))
-
-# print(isDateOrigBetween(tags, ap.startDate, ap.endDate))
+all = collect(ap)
+for p in all:
+    for f in ap.filters:
+        if f.apply(p):
+            for a in ap.actions:
+                a.act(p)
